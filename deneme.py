@@ -1,109 +1,209 @@
-from os import system as komut
-class Banka():
-    def __init__(self,isim):
-        self.isim = isim
+from __future__ import annotations
+
+import json
+import logging
+import os
+from dataclasses import dataclass, asdict
+from pathlib import Path
+from typing import Dict, Optional
 
 
-class Musteri():
-    bakiye = 0
-    def __init__(self,ad,soyad,tc,id):
-        self.ad = ad
-        self.soyad = soyad
-        self.tc = tc
-        self.id = id
+# Basit log yapılandırması
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(message)s",
+)
+logger = logging.getLogger("banka")
 
 
-
-class MusteriBilgileri():
-    bilgiler = []
+DATA_FILE = Path(__file__).with_name("data.json")
 
 
+def clear_screen() -> None:
+    os.system("cls" if os.name == "nt" else "clear")
 
 
-def main():
-    banka = Banka("Akbank Direkt")
+def pause(msg: str = "Ana menüye dönmek için ENTER'a basınız...") -> None:
+    try:
+        input(msg)
+    except EOFError:
+        pass
+
+
+def prompt_non_empty(prompt_text: str) -> str:
     while True:
-        komut("cls")
+        value = input(prompt_text).strip()
+        if value:
+            return value
+        print("Boş bırakılamaz. Lütfen tekrar deneyin.")
 
 
-        print("""
-            
-            [1] Müşteri Ol
-            [2] Hesabım Var
-        """)
-        secim = input("Seçiminizi Yazınız: ")
-        if  secim == "1":
-            Musteri.ad = input("Lütfen Adınızı Giriniz: ")
-            Musteri.soyad = input("Lütfen Soyadınızı Giriniz: ")
-            Musteri.tc = input("Tc Kimlik Numaranızı Giriniz: ")
-            Musteri.id = input("İd Numaranızı Giriniz : ")
+def prompt_amount(prompt_text: str) -> int:
+    while True:
+        raw = input(prompt_text).strip().replace(" ", "")
+        if not raw.isdigit():
+            print("Lütfen geçerli bir tam sayı giriniz.")
+            continue
+        amount = int(raw)
+        if amount <= 0:
+            print("Tutar 0'dan büyük olmalıdır.")
+            continue
+        return amount
 
-            if Musteri.ad and Musteri.soyad and Musteri.tc and Musteri.id:
-                MusteriBilgileri.bilgiler.append([Musteri.ad,Musteri.soyad,Musteri.tc,Musteri.id])
-                print(MusteriBilgileri.bilgiler)
-                input("Ana Menüye dönmek için lütfen 'ENTER'e basınız!")
+
+@dataclass
+class Musteri:
+    ad: str
+    soyad: str
+    tc: str
+    musteri_id: str
+    bakiye: int = 0
+
+
+class Banka:
+    def __init__(self, isim: str) -> None:
+        self.isim = isim
+        self.musteriler: Dict[str, Musteri] = {}
+
+    # Veri işlemleri
+    def kaydet(self) -> None:
+        data = {tc: asdict(m) for tc, m in self.musteriler.items()}
+        DATA_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        logger.debug("Veriler kaydedildi: %s", DATA_FILE)
+
+    def yukle(self) -> None:
+        if DATA_FILE.exists():
+            try:
+                raw = json.loads(DATA_FILE.read_text(encoding="utf-8"))
+                self.musteriler = {tc: Musteri(**info) for tc, info in raw.items()}
+                logger.info("%d müşteri yüklendi.", len(self.musteriler))
+            except Exception as exc:
+                logger.exception("Veri yüklenirken hata: %s", exc)
+                self.musteriler = {}
+
+    # İş mantığı
+    def musteri_ekle(self, ad: str, soyad: str, tc: str, musteri_id: str) -> Musteri:
+        if tc in self.musteriler:
+            raise ValueError("Bu TC ile kayıt zaten var.")
+        yeni = Musteri(ad=ad, soyad=soyad, tc=tc, musteri_id=musteri_id, bakiye=0)
+        self.musteriler[tc] = yeni
+        self.kaydet()
+        logger.info("Yeni müşteri eklendi: %s %s (%s)", ad, soyad, tc)
+        return yeni
+
+    def musteri_bul(self, tc: str, musteri_id: str) -> Optional[Musteri]:
+        musteri = self.musteriler.get(tc)
+        if musteri and musteri.musteri_id == musteri_id:
+            return musteri
+        return None
+
+    def para_yatir(self, musteri: Musteri, miktar: int) -> None:
+        musteri.bakiye += miktar
+        self.kaydet()
+        logger.info("%s için %s TL yatırıldı. Yeni bakiye: %s", musteri.tc, miktar, musteri.bakiye)
+
+    def para_cek(self, musteri: Musteri, miktar: int) -> None:
+        if miktar > musteri.bakiye:
+            raise ValueError("Yetersiz bakiye.")
+        musteri.bakiye -= miktar
+        self.kaydet()
+        logger.info("%s için %s TL çekildi. Yeni bakiye: %s", musteri.tc, miktar, musteri.bakiye)
+
+
+def menu_ana(banka: Banka) -> None:
+    while True:
+        clear_screen()
+        print(f"\n{banka.isim} - Ana Menü\n")
+        print("[1] Müşteri Ol")
+        print("[2] Hesabım Var")
+        print("[Q] Çıkış")
+        secim = input("Seçiminizi yazınız: ").strip().lower()
+
+        if secim == "1":
+            ad = prompt_non_empty("Adınız: ")
+            soyad = prompt_non_empty("Soyadınız: ")
+            tc = prompt_non_empty("TC Kimlik Numaranız: ")
+            musteri_id = prompt_non_empty("Müşteri ID (şifre gibi): ")
+            try:
+                musteri = banka.musteri_ekle(ad, soyad, tc, musteri_id)
+                print(f"Hoşgeldiniz {musteri.ad} {musteri.soyad}. Kayıt tamamlandı.")
+            except ValueError as exc:
+                print(str(exc))
+            pause()
+
         elif secim == "2":
-            tc = input("Tc Kimlik Numaranızı Giriniz: ")
-            id = input("İd Numaranızı Giriniz : ")
+            tc = prompt_non_empty("TC Kimlik Numaranız: ")
+            musteri_id = prompt_non_empty("Müşteri ID'niz: ")
+            musteri = banka.musteri_bul(tc, musteri_id)
+            if not musteri:
+                print("Bilgiler hatalı veya hesap bulunamadı.")
+                pause()
+                continue
+            menu_hesap(banka, musteri)
 
-            while True:
-                komut("cls")
-                if tc == Musteri.tc and id == Musteri.id:
-                    print("Hoşgeldiniz {} {}".format(Musteri.ad,Musteri.soyad))
-                    print("""
-                        [A] Para Yatırma
-                        [B] Para Çekme
-                        [C] Hesap Bilgileri
-                        [Q] Çıkış
-                    """)
-
-                    secim = input("Lütfen yapmak istediğiniz işlemi yazınız: ")
-
-                    if secim == "A" or secim == " A":
-                        miktar = int(input("Yatırmak istediğiniz tutarı giriniz: "))
-                        Musteri.bakiye += miktar
-                        print("Hesabınıza {} TL yatırılmıştır.".format(miktar))
-                        input("Ana Menüye Dönmek İçin Lütfen 'ENTER'e basınız!")
-
-                    elif secim == "B" or secim == " B":
-                        miktar = int(input("Çekmek istediğiniz tutarı giriniz: "))
-                        if miktar >= Musteri.bakiye:
-                            print("Yetersiz Bakiye !")
-                            input("Ana Menüye Dönmek İçin Lütfen 'ENTER'e basınız!")
-
-                        elif miktar <= 0:
-                            print("Lütfen Doğru bir değer giriniz 0 dan küçük olamaz çekeceğiniz para")
-                            input("Ana Menüye Dönmek İçin Lütfen 'ENTER'e basınız!")
-
-                        else:
-                            Musteri.bakiye -= miktar
-                            print("Hesabınızadan {} TL çekilmiştir. Kalan Bakiyeniz: {}".format(miktar, Musteri.bakiye))
-                            input("Ana Menüye Dönmek İçin Lütfen 'ENTER'e basınız!")
-
-                    elif secim == "C" or secim == " C":
-                        print("Adınız: {}".format(Musteri.ad))
-                        print("Soyadınız: {}".format(Musteri.soyad))
-                        print("Tc No: {}".format(Musteri.tc))
-                        print("İd No: {}".format(Musteri.id))
-                        print("Hesabınızdaki Güncel Bakiye: {}".format(Musteri.bakiye))
-                        input("Ana Menüye Dönmek İçin Lütfen 'ENTER'e basınız!")
+        elif secim == "q":
+            print("Çıkış yapılıyor...")
+            break
+        else:
+            print("Geçersiz seçim.")
+            pause()
 
 
-                    elif secim == "Q" or secim == "q":
-                        print("Çıkış yapılıyor...")
-                        exit()
+def menu_hesap(banka: Banka, musteri: Musteri) -> None:
+    while True:
+        clear_screen()
+        print(f"Hoşgeldiniz {musteri.ad} {musteri.soyad}\n")
+        print("[A] Para Yatırma")
+        print("[B] Para Çekme")
+        print("[C] Hesap Bilgileri")
+        print("[R] Çıkış Yap (Hesaptan)")
+        print("[Q] Programdan Çık")
+        secim = input("İşleminiz: ").strip().lower()
 
-                    else:
-                        print("Böyle bir işlem bulunmamaktadir!")
-                        input("Ana Menüye Dönmek İçin Lütfen 'ENTER'e basınız!")
+        if secim == "a":
+            miktar = prompt_amount("Yatırmak istediğiniz tutar: ")
+            banka.para_yatir(musteri, miktar)
+            print(f"Hesabınıza {miktar} TL yatırıldı.")
+            pause()
+
+        elif secim == "b":
+            miktar = prompt_amount("Çekmek istediğiniz tutar: ")
+            try:
+                banka.para_cek(musteri, miktar)
+                print(f"Hesabınızdan {miktar} TL çekildi. Kalan bakiye: {musteri.bakiye}")
+            except ValueError as exc:
+                print(str(exc))
+            pause()
+
+        elif secim == "c":
+            print(f"Ad: {musteri.ad}")
+            print(f"Soyad: {musteri.soyad}")
+            print(f"TC: {musteri.tc}")
+            print(f"Müşteri ID: {musteri.musteri_id}")
+            print(f"Bakiye: {musteri.bakiye} TL")
+            pause()
+
+        elif secim == "r":
+            print("Hesaptan çıkılıyor...")
+            pause()
+            break
+
+        elif secim == "q":
+            print("Çıkış yapılıyor...")
+            raise SystemExit
+
+        else:
+            print("Geçersiz seçim.")
+            pause()
 
 
-
-                else:
-                    print("Girdiginiz Bilgiler Hatalı!")
-                    input("Ana Menüye Dönmek İçin Lütfen 'ENTER'e basınız!")
-
-
+def main() -> None:
+    banka = Banka("Akbank Direkt")
+    banka.yukle()
+    try:
+        menu_ana(banka)
+    except SystemExit:
+        pass
 
 
 if __name__ == "__main__":
